@@ -93,7 +93,7 @@ escape or host shell access.
 From source:
 
 ```bash
-git clone https://github.com/appcove/arbox
+git clone https://github.com/approck/arbox
 cd arbox
 cargo install --path .
 ```

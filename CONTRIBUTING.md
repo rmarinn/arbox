@@ -15,7 +15,7 @@ accepting changes is "clear win, doesn't add complexity, passes local checks."
 ## Setup
 
 ```bash
-git clone https://github.com/appcove/arbox
+git clone https://github.com/approck/arbox
 cd arbox
 cargo build
 cargo test
