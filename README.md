@@ -55,6 +55,8 @@ or a process that you intentionally gave access to your mounted credentials.
 - **`~/.claude`, `~/.claude.json`, and `~/.codex` are mounted read-write** so
   credentials and state survive container rebuilds. A compromised agent could
   modify these.
+- **Host `~/.gitconfig` is mounted read-only** when present, so git inside
+  the container picks up your identity, aliases, and signing config.
 - **Optional Claude/Codex binary locations are mounted read-only** from
   `~/.local/bin` and `~/.local/share/claude` when those paths exist.
 - **The host Wayland display socket is mounted when available** so

@@ -75,6 +75,10 @@ pub fn mount_specs(host: &HostContext) -> Vec<MountSpec> {
         // makes claude's credentials persist across container invocations.
         MountSpec::new(h.join(".claude.json"), false, false, None),
         MountSpec::new(h.join(".codex"), false, false, None),
+        // Host's ~/.gitconfig (read-only). So git inside the container picks
+        // up the user's identity, aliases, signing config, etc. Skipped if
+        // absent on the host.
+        MountSpec::new(h.join(".gitconfig"), true, false, None),
         // Optional: where claude/codex binaries live on this host. Skipped
         // silently when absent (e.g. on a host that uses a different layout).
         MountSpec::new(h.join(".local").join("bin"), true, false, None),
