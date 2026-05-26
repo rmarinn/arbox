@@ -57,8 +57,10 @@ or a process that you intentionally gave access to your mounted credentials.
   modify these.
 - **Host `~/.gitconfig` is mounted read-only** when present, so git inside
   the container picks up your identity, aliases, and signing config.
-- **Optional Claude/Codex binary locations are mounted read-only** from
-  `~/.local/bin` and `~/.local/share/claude` when those paths exist.
+- **`~/.local/bin` and `~/.local/share/claude` are mounted read-only when
+  they exist.** The coding-agent binaries themselves come from the image
+  (claude, codex, agy, grok all baked in), so these mounts are now purely
+  for any other host-installed tools you keep under `~/.local/bin`.
 - **The host Wayland display socket is mounted when available** so
   `wl-paste` works for clipboard image flows. Only the socket file is
   mounted, not the full `$XDG_RUNTIME_DIR`.
@@ -88,10 +90,12 @@ escape or host shell access.
   `~/.rustup` must exist before launching arbox.
 - **Git** on the host. The workspace is resolved via `git rev-parse
   --show-toplevel`.
-- For the AI clients: **Claude Code** and/or **Codex CLI** authenticated on
-  the host. `arbox claude` checks for `~/.claude` and `~/.claude.json`;
-  `arbox codex` checks for `~/.codex`. `arbox bash` and `arbox run` do not
-  require agent config directories.
+- **For the AI agents (claude, codex, agy, grok): nothing on the host.**
+  All four CLIs are baked into the image. The first time you run a given
+  verb, arbox creates the agent's state paths on the host (`~/.claude` +
+  `~/.claude.json` for claude, `~/.codex` for codex, `~/.gemini` +
+  `~/.config/antigravity` for agy, `~/.grok` for grok) and bind-mounts them
+  in so credentials and history persist across subsequent runs.
 
 ## Install
 
@@ -115,11 +119,14 @@ arbox bash                         # interactive bash, project auto-mounted
 arbox run -- cargo test            # one-off command
 arbox claude                       # Claude Code, project auto-mounted
 arbox codex                        # Codex CLI, project auto-mounted
+arbox agy                          # Google Antigravity CLI
+arbox grok                         # xAI Grok Build CLI
 ```
 
 The first build can take a few minutes because the image installs common
-development packages plus uv, deno, Node, and Playwright with chromium +
-firefox baked in (~700 MB just for the browsers). Subsequent launches reuse the per-host
+development packages plus uv, deno, Node 22, Playwright with chromium +
+firefox baked in (~700 MB just for the browsers), and all four coding
+agents (claude, codex, agy, grok). Subsequent launches reuse the per-host
 image tag, which is `arbox:<ubuntu-codename>-uid<uid>-<dockerfile-hash>`.
 The Dockerfile-content hash is the trailing 8 hex chars; editing the
 embedded Dockerfile changes the hash, which makes the next launch verb
@@ -135,9 +142,10 @@ clear message.
 
 | Command                         | Description |
 |---------------------------------|-------------|
-| `arbox claude [FLAGS] -- ARGS...` | Run Claude Code with `--dangerously-skip-permissions`. |
-| `arbox codex  [FLAGS] -- ARGS...` | Run Codex CLI with `--dangerously-bypass-approvals-and-sandbox`. |
-| `arbox agy    [FLAGS] -- ARGS...` | Run Google Antigravity's `agy` CLI. Binary comes from host `~/.local/bin/agy`; first-time auth uses agy's SSH-style URL+code flow since libsecret isn't reachable inside the container. |
+| `arbox claude [FLAGS] -- ARGS...` | Run Claude Code with `--dangerously-skip-permissions`. Binary baked into image; `~/.claude` + `~/.claude.json` mount from the host if present. |
+| `arbox codex  [FLAGS] -- ARGS...` | Run Codex CLI with `--dangerously-bypass-approvals-and-sandbox`. Binary baked into image; `~/.codex` mounts from the host if present. |
+| `arbox agy    [FLAGS] -- ARGS...` | Run Google Antigravity's `agy` CLI. Binary baked into image; `~/.gemini` and `~/.config/antigravity` mount from the host. First-time auth uses agy's SSH-style URL+code flow since libsecret isn't reachable inside the container. |
+| `arbox grok   [FLAGS] -- ARGS...` | Run xAI's Grok Build CLI. Binary baked into image; `~/.grok` mounts from the host (token lives in `~/.grok/auth.json`). |
 | `arbox bash   [FLAGS]`          | Open an interactive login bash inside the container. |
 | `arbox playwright [FLAGS] -- ARGS...` | Run the Playwright CLI (`test`, `codegen`, `show-report`, …). Image ships Node + Playwright + chromium + firefox. |
 | `arbox run    [FLAGS] -- CMD...`  | Run a one-off command inside the container. |
@@ -147,13 +155,14 @@ clear message.
 | `arbox status`                  | Show host facts, mount layout, image presence, and network mode. Works outside a git repository (skips the workspace mount in that case). |
 | `arbox clean`                   | Remove every arbox image whose tag has the current host's prefix. |
 
-`claude`, `codex`, `agy`, `bash`, and `run` must be invoked from inside a
-git repository — they mount the git toplevel as the workspace and `cd` into
-your current directory. `status`, `build`, and `clean` do not require a repo.
+`claude`, `codex`, `agy`, `grok`, `bash`, and `run` must be invoked from
+inside a git repository — they mount the git toplevel as the workspace and
+`cd` into your current directory. `status`, `build`, and `clean` do not
+require a repo.
 
 ### Extra bind-mount flags
 
-`claude`, `codex`, `agy`, `bash`, and `run` accept zero or more `--rw <PATH>` and
+`claude`, `codex`, `agy`, `grok`, `bash`, and `run` accept zero or more `--rw <PATH>` and
 `--ro <PATH>` options. Each path is canonicalized (relative paths and
 symlinks resolve against the host filesystem) and mounted at the same
 absolute path inside the container.

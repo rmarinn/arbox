@@ -90,8 +90,9 @@ RUN ARCH=$(case "${TARGETARCH}" in \
 
 # Node.js (LTS, pinned). Mirrors the uv/deno pattern: versioned tarball
 # from the canonical distribution, no `curl | sh` against a moving install
-# script. Override NODE_VERSION at build time to bump.
-ARG NODE_VERSION=20.18.1
+# script. Override NODE_VERSION at build time to bump. 22.x is required —
+# @openai/codex's npm package rejects anything older.
+ARG NODE_VERSION=22.11.0
 RUN ARCH=$(case "${TARGETARCH}" in \
         amd64) echo x64 ;; \
         arm64) echo arm64 ;; \
@@ -114,6 +115,50 @@ RUN npm install -g \
       "@playwright/test@${PLAYWRIGHT_VERSION}" \
  && playwright install chromium firefox \
  && chmod -R a+rX /opt/ms-playwright
+
+# All four coding agents baked into the image. The host's user config dirs
+# (~/.claude, ~/.claude.json, ~/.codex, ~/.gemini, ~/.config/antigravity,
+# ~/.grok) are still bind-mounted from the host so credentials and history
+# persist across container invocations, but the BINARIES live in the image —
+# no host install needed, and the host's ~/.local/bin shadow is no longer
+# relied on for agent launches.
+#
+# claude + codex via npm (official distribution channels). agy and grok via
+# their respective install.sh scripts, run with a staged HOME so their
+# self-update / download caches don't pollute /root.
+ARG CLAUDE_CODE_VERSION=latest
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+ARG CODEX_VERSION=latest
+RUN npm install -g "@openai/codex@${CODEX_VERSION}"
+
+# Antigravity CLI (`agy`). The install.sh accepts `--dir` for a custom
+# install location; we stage the script's transient files under a temp HOME
+# and drop the binary at /usr/local/bin/agy. The script's trailing
+# `agy install` step (which configures shell rc files for an interactive
+# user) is harmless here — it writes into the staged HOME, which is then
+# deleted.
+RUN HOME=/tmp/agy-stage mkdir -p /tmp/agy-stage \
+ && curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
+ && HOME=/tmp/agy-stage bash /tmp/agy-install.sh --dir /usr/local/bin \
+ && rm -rf /tmp/agy-stage /tmp/agy-install.sh
+
+# Grok Build CLI (`grok`). The install.sh downloads a static binary into
+# $HOME/.grok/downloads and symlinks $GROK_BIN_DIR/grok at it; running as
+# root it ALSO drops /usr/local/bin/grok + /usr/local/bin/agent symlinks
+# pointing back into the staged HOME. We let it do all that, then resolve
+# the symlink chain to copy the real binary out to a path that survives
+# staged-HOME cleanup, replace the symlink with the real file, and drop
+# the `agent` alias (we only expose `grok` as an arbox verb).
+RUN mkdir -p /tmp/grok-stage \
+ && curl -fsSL https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
+ && HOME=/tmp/grok-stage GROK_BIN_DIR=/tmp/grok-stage/bin \
+      bash /tmp/grok-install.sh \
+ && cp "$(readlink -f /usr/local/bin/grok)" /tmp/grok-bin \
+ && rm -f /usr/local/bin/grok /usr/local/bin/agent \
+ && mv /tmp/grok-bin /usr/local/bin/grok \
+ && chmod +x /usr/local/bin/grok \
+ && rm -rf /tmp/grok-stage /tmp/grok-install.sh
 
 # Mirror the host user/group exactly.
 # Most ubuntu:<codename> base images ship a default user at uid 1000;

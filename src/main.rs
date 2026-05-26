@@ -12,25 +12,19 @@ use arbox::{image, launch};
     about = "Docker-based agent sandbox: a skinny chroot of the host"
 )]
 struct Cli {
-    /// Mount HOST_PATH read-write at the same path inside the container.
-    /// Repeatable. Global — placeable before or after the subcommand.
+    /// Mount HOST_PATH read-write (repeatable, global).
     #[arg(long = "rw", value_name = "PATH", global = true)]
     rw: Vec<PathBuf>,
 
-    /// Mount HOST_PATH read-only at the same path inside the container.
-    /// Repeatable. Global — placeable before or after the subcommand.
+    /// Mount HOST_PATH read-only (repeatable, global).
     #[arg(long = "ro", value_name = "PATH", global = true)]
     ro: Vec<PathBuf>,
 
-    /// Shortcut for `--rw $HOME/Desktop`. Useful when you want to drop
-    /// screenshots or scratch files between host and container. Mount fails
-    /// loudly if $HOME/Desktop doesn't exist.
+    /// Shortcut for --rw $HOME/Desktop (fails if missing).
     #[arg(long = "desktop", global = true)]
     desktop: bool,
 
-    /// Shortcut for `--rw $HOME/Downloads`. Useful for handing artifacts
-    /// (built binaries, captured traces, etc.) between host and container.
-    /// Mount fails loudly if $HOME/Downloads doesn't exist.
+    /// Shortcut for --rw $HOME/Downloads (fails if missing).
     #[arg(long = "downloads", global = true)]
     downloads: bool,
 
@@ -40,45 +34,61 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Run `claude` inside the sandbox (passes --dangerously-skip-permissions).
+    /// Run Claude Code (--dangerously-skip-permissions injected).
+    ///
     /// All trailing args are forwarded to claude:
     ///   `arbox claude --resume`, `arbox claude "describe this repo"`.
     Claude {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run `codex` inside the sandbox
-    /// (passes --dangerously-bypass-approvals-and-sandbox). All trailing args
+    /// Run Codex CLI (approval-bypass flag injected).
+    ///
+    /// Passes --dangerously-bypass-approvals-and-sandbox. All trailing args
     /// are forwarded to codex.
     Codex {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run Google Antigravity's `agy` CLI inside the sandbox. Requires
-    /// `~/.local/bin/agy` on the host (install with:
-    /// `curl -fsSL https://antigravity.google/cli/install.sh | bash`).
-    /// First-time auth uses agy's SSH-style URL+code flow because libsecret
-    /// isn't available inside the container. All trailing args forwarded.
+    /// Run Google Antigravity's `agy` CLI.
+    ///
+    /// The binary is baked into the image; ~/.gemini and
+    /// ~/.config/antigravity mount from the host for credential / skill /
+    /// MCP persistence. First-time auth uses agy's SSH-style URL+code flow
+    /// because libsecret isn't available inside the container. All
+    /// trailing args forwarded.
     Agy {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Drop into an interactive bash login shell inside the sandbox.
+    /// Run xAI's Grok Build (`grok`) CLI.
+    ///
+    /// The binary is baked into the image; ~/.grok mounts from the host
+    /// for auth (token in ~/.grok/auth.json) and download cache. All
+    /// trailing args forwarded — grok's safety story is plan-mode review,
+    /// not an approval-bypass flag.
+    Grok {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Interactive bash login shell inside the sandbox.
     Bash,
-    /// Run the Playwright CLI inside the sandbox (image ships node +
-    /// playwright + chromium + firefox + the system libs they link
-    /// against). Examples: `arbox playwright test`, `arbox playwright
-    /// codegen https://example.com`, `arbox playwright show-report`.
+    /// Run the Playwright CLI (test, codegen, show-report, …).
+    ///
+    /// Image ships node + playwright + chromium + firefox + the system
+    /// libs they link against. Examples: `arbox playwright test`,
+    /// `arbox playwright codegen https://example.com`,
+    /// `arbox playwright show-report`.
     Playwright {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run an arbitrary command inside the sandbox: `arbox run -- cargo test`.
+    /// Run an arbitrary command: `arbox run -- cargo test`.
     Run {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
-    /// Build (or rebuild) the sandbox image for the current host.
+    /// Build (or rebuild) the sandbox image for this host.
     Build {
         /// Force a rebuild even if the image already exists.
         #[arg(long)]
@@ -87,9 +97,9 @@ enum Cmd {
         #[arg(long)]
         no_cache: bool,
     },
-    /// Print detected host facts, image presence, and mount layout.
+    /// Show host facts, image presence, and mount layout.
     Status,
-    /// Remove every arbox image whose tag has the current host's prefix.
+    /// Remove every arbox image for this host.
     Clean,
 }
 
@@ -128,6 +138,7 @@ fn dispatch(cmd: Cmd, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
         Cmd::Claude { args } => launch::run_claude(args, rw, ro),
         Cmd::Codex { args } => launch::run_codex(args, rw, ro),
         Cmd::Agy { args } => launch::run_agy(args, rw, ro),
+        Cmd::Grok { args } => launch::run_grok(args, rw, ro),
         Cmd::Bash => launch::run_bash(rw, ro),
         Cmd::Playwright { args } => launch::run_playwright(args, rw, ro),
         Cmd::Run { cmd } => launch::run_argv(cmd, rw, ro),

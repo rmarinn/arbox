@@ -65,30 +65,32 @@ pub fn mount_specs(host: &HostContext) -> Vec<MountSpec> {
             true,
             Some("install rustup on the host first (https://rustup.rs)"),
         ),
-        // Agent dotfiles are NOT marked required at the mount-list level —
-        // `arbox bash` and `arbox run` shouldn't fail just because the user
-        // hasn't run claude/codex on the host. Verbs that actually launch an
-        // agent enforce existence themselves via `require_agent_dotfiles`.
+        // Agent state directories — mounted RW and optional. The agent
+        // BINARIES themselves are baked into the image (claude, codex, agy,
+        // grok all live at /usr/local/bin), so these mounts exist only to
+        // persist credentials, history, skills, MCP config, etc. across
+        // container invocations. `ensure_agent_state` (below) auto-creates
+        // the relevant paths on first launch of each agent verb, so these
+        // mounts are reliably attached without any host-side prep.
         MountSpec::new(h.join(".claude"), false, false, None),
         // Claude on Linux stores main config + auth state at $HOME/.claude.json
-        // (a file, distinct from the .claude/ directory above). This is what
-        // makes claude's credentials persist across container invocations.
+        // (a file, distinct from the .claude/ directory above).
         MountSpec::new(h.join(".claude.json"), false, false, None),
         MountSpec::new(h.join(".codex"), false, false, None),
-        // Antigravity (`agy`) stores its skills, MCP config, and global
-        // GEMINI.md under ~/.gemini (yes — the Antigravity CLI reuses the
-        // Gemini namespace). Per-host config is under ~/.config/antigravity.
-        // Both mounted RW so first-run setup and `/skills` / `/mcp` edits
-        // persist across container invocations. Optional — `arbox bash`
-        // and `arbox run` don't need them.
+        // Antigravity (`agy`) stores skills + MCP config + GEMINI.md under
+        // ~/.gemini (the Antigravity CLI reuses the Gemini namespace);
+        // per-host config under ~/.config/antigravity.
         MountSpec::new(h.join(".gemini"), false, false, None),
         MountSpec::new(h.join(".config").join("antigravity"), false, false, None),
+        // Grok Build CLI stores its auth token + downloads under ~/.grok.
+        MountSpec::new(h.join(".grok"), false, false, None),
         // Host's ~/.gitconfig (read-only). So git inside the container picks
         // up the user's identity, aliases, signing config, etc. Skipped if
         // absent on the host.
         MountSpec::new(h.join(".gitconfig"), true, false, None),
-        // Optional: where claude/codex binaries live on this host. Skipped
-        // silently when absent (e.g. on a host that uses a different layout).
+        // Optional: user's local bin (still useful for non-agent tools the
+        // user keeps there). Read-only so the in-container agents can't
+        // shadow themselves with stale host copies.
         MountSpec::new(h.join(".local").join("bin"), true, false, None),
         MountSpec::new(
             h.join(".local").join("share").join("claude"),
@@ -101,37 +103,32 @@ pub fn mount_specs(host: &HostContext) -> Vec<MountSpec> {
     specs
 }
 
-/// Per-verb pre-flight: error out if the dotfiles a specific agent needs
-/// aren't present on the host. Bash and `run` skip this check entirely.
-fn require_agent_dotfiles(host: &HostContext, agent: &str) -> Result<()> {
-    let needs: &[(&str, PathBuf, &str)] = match agent {
-        "claude" => &[
-            (
-                "~/.claude",
-                host.home.join(".claude"),
-                "run `claude` once on the host to set up its config dir",
-            ),
-            (
-                "~/.claude.json",
-                host.home.join(".claude.json"),
-                "run `claude` once on the host to create ~/.claude.json",
-            ),
-        ][..],
-        "codex" => &[(
-            "~/.codex",
-            host.home.join(".codex"),
-            "run `codex` once on the host to authenticate first",
-        )][..],
-        "agy" => &[(
-            "~/.local/bin/agy",
-            host.home.join(".local").join("bin").join("agy"),
-            "install Antigravity CLI on the host: curl -fsSL https://antigravity.google/cli/install.sh | bash",
-        )][..],
-        _ => &[][..],
+/// Pre-create the host-side state paths an agent will write into, so the
+/// bind mount has something to attach to on first run. Without this, Docker
+/// silently skips missing-source mounts and the agent runs with ephemeral
+/// state every launch. Each call is per-verb — only the dirs the specific
+/// agent uses are touched.
+fn ensure_agent_state(host: &HostContext, agent: &str) -> Result<()> {
+    let h = &host.home;
+    let dirs: Vec<PathBuf> = match agent {
+        "claude" => vec![h.join(".claude")],
+        "codex" => vec![h.join(".codex")],
+        "agy" => vec![h.join(".gemini"), h.join(".config").join("antigravity")],
+        "grok" => vec![h.join(".grok")],
+        _ => vec![],
     };
-    for (label, path, hint) in needs {
-        if !path.exists() {
-            bail!("{label} does not exist — {hint}");
+    for d in &dirs {
+        std::fs::create_dir_all(d)
+            .with_context(|| format!("creating {}", d.display()))?;
+    }
+    // Claude's main config + auth state is a FILE next to its dir, not
+    // inside it. Initialize with `{}` (parseable JSON) so claude's first
+    // load doesn't choke on a zero-byte mount target.
+    if agent == "claude" {
+        let cj = h.join(".claude.json");
+        if !cj.exists() {
+            std::fs::write(&cj, "{}\n")
+                .with_context(|| format!("creating {}", cj.display()))?;
         }
     }
     Ok(())
@@ -140,7 +137,7 @@ fn require_agent_dotfiles(host: &HostContext, agent: &str) -> Result<()> {
 pub fn run_claude(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
     let host = host::detect()?;
     host::require_git(&host)?;
-    require_agent_dotfiles(&host, "claude")?;
+    ensure_agent_state(&host, "claude")?;
     // The container IS the sandbox, so granting claude full permissions
     // inside is the correct posture.
     let mut argv = vec![
@@ -154,7 +151,7 @@ pub fn run_claude(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Res
 pub fn run_codex(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
     let host = host::detect()?;
     host::require_git(&host)?;
-    require_agent_dotfiles(&host, "codex")?;
+    ensure_agent_state(&host, "codex")?;
     let mut argv = vec![
         "codex".to_string(),
         "--dangerously-bypass-approvals-and-sandbox".to_string(),
@@ -166,13 +163,26 @@ pub fn run_codex(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Resu
 pub fn run_agy(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
     let host = host::detect()?;
     host::require_git(&host)?;
-    require_agent_dotfiles(&host, "agy")?;
+    ensure_agent_state(&host, "agy")?;
     // No documented `--dangerously-*` / `--yolo` flag for Antigravity yet —
     // forward args verbatim. The Docker boundary is still the sandbox; agy
     // itself just runs with whatever approval mode it defaults to. Note
     // that libsecret won't work inside the container (no dbus session), so
     // first-time auth typically goes through agy's SSH-style URL+code flow.
     let mut argv = vec!["agy".to_string()];
+    argv.extend(extra);
+    run(host, argv, rw, ro)
+}
+
+pub fn run_grok(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
+    let host = host::detect()?;
+    host::require_git(&host)?;
+    ensure_agent_state(&host, "grok")?;
+    // Grok Build's safety story is its plan-mode review, not a global
+    // approval-bypass flag — forward args verbatim. Auth lives in
+    // ~/.grok/auth.json (file-based, no keyring dependency), which the
+    // ~/.grok mount in `mount_specs` persists across runs.
+    let mut argv = vec!["grok".to_string()];
     argv.extend(extra);
     run(host, argv, rw, ro)
 }
