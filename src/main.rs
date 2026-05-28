@@ -28,6 +28,10 @@ struct Cli {
     #[arg(long = "downloads", global = true)]
     downloads: bool,
 
+    /// Passes in 'ANTHROPIC_API_KEY' when using claude
+    #[arg(long, global = true)]
+    pass_ai_env_vars: bool,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -41,6 +45,9 @@ enum Cmd {
     Claude {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Passes in 'ANTHROPIC_API_KEY'
+        #[arg(long, global = true)]
+        pass_ai_env_vars: bool,
     },
     /// Run Codex CLI (approval-bypass flag injected).
     ///
@@ -135,13 +142,13 @@ fn main() -> ExitCode {
 
 fn dispatch(cmd: Cmd, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
     match cmd {
-        Cmd::Claude { args } => launch::run_claude(args, rw, ro),
+        Cmd::Claude { args, pass_ai_env_vars } => launch::run_claude(args, rw, ro, pass_ai_env_vars),
         Cmd::Codex { args } => launch::run_codex(args, rw, ro),
         Cmd::Agy { args } => launch::run_agy(args, rw, ro),
         Cmd::Grok { args } => launch::run_grok(args, rw, ro),
         Cmd::Bash => launch::run_bash(rw, ro),
         Cmd::Playwright { args } => launch::run_playwright(args, rw, ro),
-        Cmd::Run { cmd } => launch::run_argv(cmd, rw, ro),
+        Cmd::Run { cmd } => launch::run_argv(cmd, rw, ro, &[]),
         Cmd::Build { force, no_cache } => {
             image::build_image(force, no_cache).map(|_| ExitCode::SUCCESS)
         }

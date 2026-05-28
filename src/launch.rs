@@ -198,7 +198,7 @@ fn ensure_agent_state(host: &HostContext, agent: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_claude(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
+pub fn run_claude(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>, pass_anthropic_api_key: bool) -> Result<ExitCode> {
     let host = host::detect()?;
     host::require_git(&host)?;
     ensure_agent_state(&host, "claude")?;
@@ -209,7 +209,14 @@ pub fn run_claude(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Res
         "--dangerously-skip-permissions".to_string(),
     ];
     argv.extend(extra);
-    run(host, argv, rw, ro)
+
+    if pass_anthropic_api_key {
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            return run(host, argv, rw, ro, &[format!("ANTHROPIC_API_KEY={key}")]);
+        }
+    } 
+
+    run(host, argv, rw, ro, &[])
 }
 
 pub fn run_codex(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
@@ -221,7 +228,7 @@ pub fn run_codex(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Resu
         "--dangerously-bypass-approvals-and-sandbox".to_string(),
     ];
     argv.extend(extra);
-    run(host, argv, rw, ro)
+    run(host, argv, rw, ro, &[])
 }
 
 pub fn run_agy(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
@@ -235,7 +242,7 @@ pub fn run_agy(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result
     // first-time auth typically goes through agy's SSH-style URL+code flow.
     let mut argv = vec!["agy".to_string()];
     argv.extend(extra);
-    run(host, argv, rw, ro)
+    run(host, argv, rw, ro, &[])
 }
 
 pub fn run_grok(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
@@ -248,7 +255,7 @@ pub fn run_grok(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Resul
     // ~/.grok mount in `mount_specs` persists across runs.
     let mut argv = vec!["grok".to_string()];
     argv.extend(extra);
-    run(host, argv, rw, ro)
+    run(host, argv, rw, ro, &[])
 }
 
 pub fn run_playwright(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
@@ -259,7 +266,7 @@ pub fn run_playwright(extra: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) ->
     // Dockerfile), so this works without any host-side setup.
     let mut argv = vec!["playwright".to_string()];
     argv.extend(extra);
-    run(host, argv, rw, ro)
+    run(host, argv, rw, ro, &[])
 }
 
 pub fn run_bash(rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
@@ -270,23 +277,26 @@ pub fn run_bash(rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
         vec!["/bin/bash".to_string(), "-l".to_string()],
         rw,
         ro,
+        &[]
     )
 }
 
-pub fn run_argv(argv: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>) -> Result<ExitCode> {
+pub fn run_argv(argv: Vec<String>, rw: Vec<PathBuf>, ro: Vec<PathBuf>, env_vars: &[String]) -> Result<ExitCode> {
     if argv.is_empty() {
         bail!("arbox run needs a command");
     }
     let host = host::detect()?;
     host::require_git(&host)?;
-    run(host, argv, rw, ro)
+    run(host, argv, rw, ro, env_vars)
 }
 
+/// Each item in the `env_vars` param must be in a "KEY=VALUE" format
 fn run(
     host: HostContext,
     argv: Vec<String>,
     extra_rw: Vec<PathBuf>,
     extra_ro: Vec<PathBuf>,
+    env_vars: &[String],
 ) -> Result<ExitCode> {
     ensure_docker_installed()?;
     host::require_supported_distro(&host)?;
@@ -330,8 +340,8 @@ fn run(
     cmd.arg("-e").arg(format!("USER={}", host.username));
     cmd.arg("-e").arg(format!("TERM={}", host.term));
     cmd.arg("-e").arg("LANG=C.UTF-8");
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        cmd.arg("-e").arg(format!("ANTHROPIC_API_KEY={key}"));
+    for var in env_vars {
+        cmd.arg("-e").arg(var);
     }
 
     for m in &mounts {
